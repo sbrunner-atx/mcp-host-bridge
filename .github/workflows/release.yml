@@ -1,0 +1,73 @@
+name: Release
+
+# Build single-file binaries for each OS and attach them to the GitHub Release.
+# Triggered when a release is published (create a release for a tag like v0.1.0).
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  binaries:
+    name: Build ${{ matrix.asset_name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            asset_name: mcp-host-bridge-macos
+            built: dist/mcp-host-bridge
+          - os: ubuntu-latest
+            asset_name: mcp-host-bridge-linux
+            built: dist/mcp-host-bridge
+          - os: windows-latest
+            asset_name: mcp-host-bridge.exe
+            built: dist/mcp-host-bridge.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build deps
+        run: uv sync --group build
+
+      - name: Build single-file binary
+        run: uv run pyinstaller --onefile --name mcp-host-bridge src/mcp_host_bridge/__main__.py
+
+      - name: Rename to per-OS asset name (unix)
+        if: runner.os != 'Windows'
+        run: mv "${{ matrix.built }}" "dist/${{ matrix.asset_name }}"
+
+      - name: Upload to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ matrix.asset_name }}
+
+  pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    # Requires a PYPI_TOKEN secret (account- or project-scoped). The very first
+    # upload must use an account-scoped token; project-scoped works afterward.
+    # Remove this job if you prefer to publish manually with `uv publish`.
+    if: ${{ vars.PUBLISH_PYPI == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      - name: Publish
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: uv publish

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments / uv
+.venv/
+venv/
+
+# Tooling caches
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+
+# PyInstaller
+*.spec
+*.spec.bak
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local live-test scratch scripts (never committed)
+livecheck.py
+probe.py
