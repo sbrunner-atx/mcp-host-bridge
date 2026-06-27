@@ -59,6 +59,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_run = sub.add_parser("run", help="Run the relay in the foreground (Ctrl-C to stop).")
     add_target_opts(p_run)
+    p_run.add_argument(
+        "--udp", action="store_true",
+        help="Force UDP mode with explicit --listen/--deliver (used by the installed service).",
+    )
     p_run.add_argument("--timeout", type=float, default=6.0)
 
     add_target_opts(
@@ -93,6 +97,66 @@ def _resolve(args: argparse.Namespace):
     return name, lh, lp, None, None, svc
 
 
+def _serve_udp(lh: int, lp: int, dh: str, dp: int, rh, rp) -> int:
+    try:
+        serve_udp(lh, lp, dh, dp, rh, rp)
+    except KeyboardInterrupt:
+        return 0
+    except OSError as exc:
+        print(f"mcp-host-bridge failed: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _serve_tcp(lh: str, lp: int, th: str, tp: int, timeout: float) -> int:
+    try:
+        serve(lh, lp, th, tp, timeout)
+    except KeyboardInterrupt:
+        return 0
+    except OSError as exc:
+        print(f"mcp-host-bridge failed: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    """Handle ``run``, accepting both preset names and the bare relay-style
+    invocations the installer generates (no preset; explicit addresses), so the
+    frozen binary's entry point understands the same args as ``relay.run_main``.
+    """
+    # Explicit UDP relay (installed service / power user): no preset needed.
+    if args.udp:
+        if not args.listen or not args.deliver:
+            parser.error("--udp run requires --listen and --deliver")
+        lh, lp = split_hostport(args.listen, 0)
+        dh, dp = split_hostport(args.deliver, 0)
+        rh = rp = None
+        if args.to:
+            rh, rp = split_hostport(args.to, lp)
+        return _serve_udp(lh, lp, dh, dp, rh, rp)
+
+    # Explicit TCP relay (installed service): --to + --listen, no preset.
+    if args.to and args.listen and not args.service and not args.port:
+        th, tp = split_hostport(args.to, 0)
+        lh, lp = split_hostport(args.listen, 0)
+        return _serve_tcp(lh, lp, th, tp, args.timeout)
+
+    # Preset-based interactive use.
+    try:
+        _name, lh, lp, dh, dp, svc = _resolve(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if svc.protocol == "udp":
+        rh = rp = None
+        if args.to:
+            rh, rp = split_hostport(args.to, svc.port)
+        return _serve_udp(lh, lp, dh, dp, rh, rp)
+    if not args.to:
+        parser.error("--to is required for a TCP service")
+    th, tp = split_hostport(args.to, svc.port)
+    return _serve_tcp(lh, lp, th, tp, args.timeout)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -105,35 +169,13 @@ def main(argv: list[str] | None = None) -> int:
         print(services.format_list())
         return 0
 
+    if cmd == "run":
+        return _run(parser, args)
+
     try:
         name, lh, lp, dh, dp, svc = _resolve(args)
     except ValueError as exc:
         parser.error(str(exc))
-
-    if cmd == "run":
-        if svc.protocol == "udp":
-            rh = rp = None
-            if args.to:
-                rh, rp = split_hostport(args.to, svc.port)
-            try:
-                serve_udp(lh, lp, dh, dp, rh, rp)
-            except KeyboardInterrupt:
-                return 0
-            except OSError as exc:
-                print(f"mcp-host-bridge failed: {exc}", file=sys.stderr)
-                return 1
-            return 0
-        if not args.to:
-            parser.error("--to is required for a TCP service")
-        th, tp = split_hostport(args.to, svc.port)
-        try:
-            serve(lh, lp, th, tp, args.timeout)
-        except KeyboardInterrupt:
-            return 0
-        except OSError as exc:
-            print(f"mcp-host-bridge failed: {exc}", file=sys.stderr)
-            return 1
-        return 0
 
     if cmd == "install":
         if svc.protocol == "udp":

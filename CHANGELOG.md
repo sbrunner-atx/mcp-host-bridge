@@ -6,6 +6,22 @@ to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-27
+
+Bug-fix release. Fixes the UDP service when run from the **standalone binary**
+(found while testing on real Windows: the v0.2.0 binaries forward TCP but the
+installed UDP service failed to start).
+
+### Fixed
+- The frozen-binary entry point (`cli.main`) now accepts the bare relay-style
+  invocations the installer generates — `run --udp --listen … --deliver …` and
+  `run --to … --listen …` without a preset name. Previously only the Python
+  `relay.py` path understood those, so binary installs of a UDP service (and TCP
+  services that actually run the relay) failed with "unrecognized arguments". The
+  new `run --udp` flag forces UDP mode with explicit addresses.
+- Windows: `schtasks /Create` now falls back to `/RU SYSTEM` when an `ONLOGON`
+  task can't be mapped to a user (service/SYSTEM contexts), instead of failing.
+
 ## [0.2.0] - 2026-06-26
 
 Adds **UDP relay support** alongside the existing TCP relay, so connectionless,

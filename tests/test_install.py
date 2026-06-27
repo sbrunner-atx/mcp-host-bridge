@@ -5,6 +5,30 @@ from __future__ import annotations
 import sys
 
 from mcp_host_bridge import install
+from mcp_host_bridge.cli import _build_parser
+
+
+def test_cli_run_accepts_installer_udp_args():
+    """The exact form _run_args emits for UDP must parse via the binary's cli entry."""
+    args = _build_parser().parse_args(
+        ["run", "--udp", "--listen", "0.0.0.0:2237", "--deliver", "127.0.0.1:2238"]
+    )
+    assert args.cmd == "run"
+    assert args.udp is True
+    assert args.listen == "0.0.0.0:2237"
+    assert args.deliver == "127.0.0.1:2238"
+    assert args.service is None
+
+
+def test_cli_run_accepts_installer_tcp_args():
+    """The bare TCP relay form (no preset) must also parse via the cli entry."""
+    args = _build_parser().parse_args(
+        ["run", "--to", "192.168.1.50:1100", "--listen", "127.0.0.1:1100"]
+    )
+    assert args.cmd == "run"
+    assert args.udp is False
+    assert args.service is None
+    assert args.to == "192.168.1.50:1100"
 
 
 def test_label_naming_is_per_service():

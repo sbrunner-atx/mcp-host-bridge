@@ -229,10 +229,13 @@ def _netsh_delete(listen_host: str, listen_port: int) -> None:
 def _install_windows_task(service: str, run_args: list[str]) -> int:
     tn = windows_task(service)
     cmd = " ".join(f'"{a}"' if " " in a else a for a in run_args)
-    rc = subprocess.run(
-        ["schtasks", "/Create", "/TN", tn, "/TR", cmd, "/SC", "ONLOGON", "/F"],
-        capture_output=True, text=True,
-    )
+    base = ["schtasks", "/Create", "/TN", tn, "/TR", cmd, "/SC", "ONLOGON"]
+    rc = subprocess.run(base + ["/F"], capture_output=True, text=True)
+    if rc.returncode != 0:
+        # A service/SYSTEM context can't map an ONLOGON task to the current user
+        # ("No mapping between account names and security IDs"); pin it to SYSTEM
+        # (no password needed; fine for a trusted-LAN byte relay).
+        rc = subprocess.run(base + ["/RU", "SYSTEM", "/F"], capture_output=True, text=True)
     if rc.returncode == 0:
         subprocess.run(["schtasks", "/Run", "/TN", tn], capture_output=True)
         print(f"Installed scheduled task '{tn}' (runs at logon).")

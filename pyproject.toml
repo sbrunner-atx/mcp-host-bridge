@@ -1,6 +1,6 @@
 [project]
 name = "mcp-host-bridge"
-version = "0.2.0"
+version = "0.2.1"
 description = "A tiny, configurable loopback-to-remote TCP/UDP relay so sandboxed MCP clients (e.g. Claude Desktop) can reach a service on another host."
 readme = "README.md"
 license = { text = "MIT" }
