@@ -1,14 +1,15 @@
 # mcp-host-bridge
 
-A tiny, configurable **loopback-to-remote TCP relay** so a sandboxed MCP client
-can reach a service running on **another computer**.
+A tiny, configurable **loopback-to-remote TCP/UDP relay** so a sandboxed MCP
+client can reach a service running on **another computer**.
 
 [![CI](https://github.com/sbrunner-atx/mcp-host-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/sbrunner-atx/mcp-host-bridge/actions/workflows/ci.yml)
 &nbsp;MIT licensed &nbsp;·&nbsp; standard-library only at runtime
 
 ```
-mcp-host-bridge install n3fjp  --to 192.168.1.50      # 127.0.0.1:1100 -> 192.168.1.50:1100
-mcp-host-bridge install fldigi --to 192.168.1.50      # 127.0.0.1:7362 -> 192.168.1.50:7362
+mcp-host-bridge install n3fjp  --to 192.168.1.50      # TCP  127.0.0.1:1100 -> 192.168.1.50:1100
+mcp-host-bridge install fldigi --to 192.168.1.50      # TCP  127.0.0.1:7362 -> 192.168.1.50:7362
+mcp-host-bridge install wsjtx  --to 192.168.1.111     # UDP  0.0.0.0:2237  -> deliver 127.0.0.1:2238
 ```
 
 ---
@@ -92,6 +93,31 @@ mcp-host-bridge list-services
 Then in the MCP connector settings, set the service host to **`127.0.0.1`**, save,
 and fully quit + reopen the client.
 
+### UDP services (WSJT-X)
+
+Some services speak **UDP**, which is connectionless and *bidirectional* — the
+remote app broadcasts datagrams *in*, and control replies must return to whatever
+address each datagram came from. The topology is therefore inverted versus TCP, so
+UDP uses a `--listen` (LAN-facing) + `--deliver` (loopback) model instead of
+`--listen` + `--to`:
+
+```
+  remote WSJT-X            bridge host                      wsjtx-mcp (loopback only)
+  UDP Server =     ──►  --listen 0.0.0.0:2237   ──►   --deliver 127.0.0.1:2238
+  <bridge-LAN-IP>:2237  (LAN socket)                  WSJTX_HOST/PORT = 127.0.0.1:2238
+  control replies  ◄──  routed back to the datagram's source (auto-learned)
+```
+
+```bash
+mcp-host-bridge install wsjtx --to 192.168.1.111   # --to is an optional hint; the
+                                                   # remote peer is auto-learned
+```
+
+This listens on `0.0.0.0:2237` (where the remote WSJT-X sends) and delivers to
+`127.0.0.1:2238` (where the MCP server listens). Then set the MCP server's host to
+`127.0.0.1` port `2238`, and point WSJT-X's **UDP Server** at this host's LAN IP,
+port `2237`. Override either side with `--listen` / `--deliver` if needed.
+
 The same `install` / `uninstall` / `status` commands work on every OS — the tool
 detects the platform and picks the backend. You never edit a plist or run `netsh`
 by hand.
@@ -110,13 +136,15 @@ the instance key.
 
 ### Service presets
 
-Built-in: **`n3fjp` = 1100**, **`fldigi` = 7362**. Add your own (optional) in
-`~/.mcp-host-bridge/services.ini`:
+Built-in: **`n3fjp` = 1100** (TCP), **`fldigi` = 7362** (TCP),
+**`wsjtx` = 2237** (UDP). Add your own (optional) in
+`~/.mcp-host-bridge/services.ini` — `name = port` is TCP, `name = port udp`
+(or `port,udp`) is UDP:
 
 ```ini
 [services]
 flrig = 12345
-wsjtx = 2237
+mybeacon = 9000 udp
 ```
 
 The file is optional; absence is fine. User entries override built-ins.
@@ -126,7 +154,7 @@ The file is optional; absence is fine. User entries override built-ins.
 | OS | Backend | Notes |
 |----|---------|-------|
 | macOS | launchd LaunchAgent | per-user, `RunAtLoad` + `KeepAlive`. |
-| Windows | `netsh interface portproxy` | native, **no Python required**, persistent. Falls back to a Scheduled Task running the relay if `netsh` is unavailable. |
+| Windows | `netsh interface portproxy` (TCP) | native, **no Python required**, persistent. UDP services use a Scheduled Task running the relay instead (netsh portproxy is TCP-only); TCP also falls back to a Scheduled Task if `netsh` is unavailable. |
 | Linux | systemd `--user` service | `Restart=always`, `WantedBy=default.target`. |
 
 When you run a downloaded binary, the installed service invokes that binary

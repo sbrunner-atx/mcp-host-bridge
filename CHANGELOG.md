@@ -6,6 +6,29 @@ to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-26
+
+Adds **UDP relay support** alongside the existing TCP relay, so connectionless,
+bidirectional services (WSJT-X) can be bridged the same way. The TCP path is
+unchanged.
+
+### Added
+- `serve_udp` relay for connectionless, bidirectional UDP: one LAN-facing socket
+  and one loopback socket, with the remote peer auto-learned from the first
+  inbound datagram (or pinned via `--to`).
+- Built-in **`wsjtx`** preset (UDP, port 2237). `install wsjtx --to <rig>` listens
+  on `0.0.0.0:2237` and delivers to `127.0.0.1:2238`.
+- `protocol` field on service presets; the optional `services.ini` accepts
+  `name = port udp` (or `port,udp`) while `name = port` stays TCP.
+- `run --udp` / `--deliver` on the relay, and `--deliver` on the CLI. UDP listen
+  defaults to `0.0.0.0:<port>`, deliver to `127.0.0.1:<port+1>`.
+- UDP-appropriate `status` (persistence state + a listen-port-in-use check;
+  no meaningless TCP-connect probe).
+
+### Changed
+- Windows: `netsh interface portproxy` is TCP-only, so UDP services skip it and
+  use the Scheduled-Task-runs-the-relay path directly.
+
 ## [0.1.0] - 2026-06-26
 
 Initial experimental release. Extracted and generalized from the forwarder that

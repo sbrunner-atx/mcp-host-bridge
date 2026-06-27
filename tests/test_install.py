@@ -17,11 +17,19 @@ def test_label_naming_is_per_service():
 def test_run_args_from_python_self_copies_relay(tmp_path, monkeypatch):
     monkeypatch.setattr(install, "CONFIG_DIR", str(tmp_path))
     monkeypatch.setattr(sys, "frozen", False, raising=False)
-    args = install._run_args("n3fjp", "192.168.1.50:1100", "127.0.0.1:1100")
+    args = install._run_args("n3fjp", "tcp", "127.0.0.1:1100", target="192.168.1.50:1100")
     # [python, <copied relay.py>, "run", "--to", target, "--listen", listen]
     assert args[-5:] == ["run", "--to", "192.168.1.50:1100", "--listen", "127.0.0.1:1100"]
     assert args[1].endswith("relay.py")
     assert (tmp_path / "relay.py").exists()
+
+
+def test_run_args_udp_emits_listen_and_deliver(tmp_path, monkeypatch):
+    monkeypatch.setattr(install, "CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    args = install._run_args("wsjtx", "udp", "0.0.0.0:2237", deliver="127.0.0.1:2238")
+    assert args[-6:] == ["run", "--udp", "--listen", "0.0.0.0:2237", "--deliver", "127.0.0.1:2238"]
+    assert "--to" not in args
 
 
 def test_run_args_when_frozen_uses_the_binary(tmp_path, monkeypatch):
@@ -32,7 +40,7 @@ def test_run_args_when_frozen_uses_the_binary(tmp_path, monkeypatch):
     monkeypatch.setattr(install, "CONFIG_DIR", str(tmp_path))
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(fake_exe), raising=False)
-    args = install._run_args("n3fjp", "192.168.1.50:1100", "127.0.0.1:1100")
+    args = install._run_args("n3fjp", "tcp", "127.0.0.1:1100", target="192.168.1.50:1100")
     # No python interpreter prefix: the binary is invoked directly.
     assert args[0] == str(tmp_path / fake_exe.name)
     assert args[1] == "run"

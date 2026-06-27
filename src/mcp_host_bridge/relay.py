@@ -21,7 +21,7 @@ import socket
 import sys
 import threading
 
-__all__ = ["serve", "probe", "split_hostport", "run_main"]
+__all__ = ["serve", "serve_udp", "probe", "udp_port_in_use", "split_hostport", "run_main"]
 
 
 def split_hostport(value: str, default_port: int) -> tuple[str, int]:
@@ -88,6 +88,91 @@ def serve(
         ).start()
 
 
+def serve_udp(
+    listen_host: str,
+    listen_port: int,
+    deliver_host: str,
+    deliver_port: int,
+    remote_host: str | None = None,
+    remote_port: int | None = None,
+) -> None:
+    """Block forever, proxying UDP between a remote (e.g. WSJT-X) and a loopback MCP server.
+
+    UDP is connectionless and *bidirectional*, so the topology is inverted versus
+    the TCP :func:`serve`: the remote peer broadcasts *in* on the LAN socket and
+    control replies must return to whatever address each datagram came from.
+
+    The relay keeps one LAN-facing socket (A, bound to ``listen_host:listen_port``)
+    and one ephemeral loopback socket (B). A datagram arriving on A is remembered
+    as the current remote peer and forwarded out of B to ``deliver_host:deliver_port``
+    (the MCP server). A datagram arriving on B is sent out of A back to the last
+    remote peer. ``remote_host``/``remote_port`` optionally pin the peer; otherwise
+    it is learned from the first inbound datagram (the remote always speaks first).
+    """
+    lan = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    lan.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    lan.bind((listen_host, listen_port))
+
+    loop = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    loop.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    loop.bind(("127.0.0.1", 0))  # ephemeral loopback source toward the MCP server
+
+    deliver = (deliver_host, deliver_port)
+    pinned = (remote_host, remote_port) if remote_host and remote_port else None
+    state: dict[str, tuple[str, int] | None] = {"remote": pinned}
+    remote_label = f"pinned {remote_host}:{remote_port}" if pinned else "auto"
+    print(
+        f"mcp-host-bridge(udp): LAN {listen_host}:{listen_port} <-> "
+        f"deliver {deliver_host}:{deliver_port} (remote={remote_label})",
+        flush=True,
+    )
+
+    def lan_to_loop() -> None:
+        while True:
+            try:
+                data, addr = lan.recvfrom(65535)
+            except OSError:
+                break
+            state["remote"] = addr  # learn / refresh the remote peer
+            try:
+                loop.sendto(data, deliver)
+            except OSError:
+                pass
+
+    def loop_to_lan() -> None:
+        while True:
+            try:
+                data, _ = loop.recvfrom(65535)
+            except OSError:
+                break
+            remote = state["remote"]
+            if remote is None:
+                continue  # nothing heard yet - nowhere to send the control reply
+            try:
+                lan.sendto(data, remote)
+            except OSError:
+                pass
+
+    t1 = threading.Thread(target=lan_to_loop, daemon=True)
+    t2 = threading.Thread(target=loop_to_lan, daemon=True)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+
+def udp_port_in_use(host: str, port: int) -> bool:
+    """True if a plain UDP bind on ``host:port`` is refused (something owns it)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.bind((host, port))
+        return False
+    except OSError:
+        return True
+    finally:
+        s.close()
+
+
 def probe(
     listen_host: str,
     listen_port: int,
@@ -134,16 +219,30 @@ def run_main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="mcp-host-bridge-relay")
     sub = parser.add_subparsers(dest="cmd")
     p_run = sub.add_parser("run", help="Run the relay in the foreground (Ctrl-C to stop).")
-    p_run.add_argument("--to", required=True, metavar="HOST[:PORT]")
+    p_run.add_argument("--udp", action="store_true", help="UDP mode (connectionless, inverted).")
     p_run.add_argument("--listen", required=True, metavar="HOST:PORT")
+    p_run.add_argument("--to", metavar="HOST[:PORT]", help="TCP target / optional UDP pinned peer.")
+    p_run.add_argument("--deliver", metavar="HOST:PORT", help="UDP only: loopback MCP listener.")
     p_run.add_argument("--timeout", type=float, default=6.0)
     args = parser.parse_args(argv)
     if args.cmd != "run":
         parser.error("this file only runs the relay; use the mcp-host-bridge CLI for management")
-    th, tp = split_hostport(args.to, 0)
+
     lh, lp = split_hostport(args.listen, 0)
     try:
-        serve(lh, lp, th, tp, args.timeout)
+        if args.udp:
+            if not args.deliver:
+                parser.error("--deliver is required in --udp mode")
+            dh, dp = split_hostport(args.deliver, 0)
+            rh = rp = None
+            if args.to:
+                rh, rp = split_hostport(args.to, lp)
+            serve_udp(lh, lp, dh, dp, rh, rp)
+        else:
+            if not args.to:
+                parser.error("--to is required for a TCP relay")
+            th, tp = split_hostport(args.to, 0)
+            serve(lh, lp, th, tp, args.timeout)
     except KeyboardInterrupt:
         return 0
     except OSError as exc:

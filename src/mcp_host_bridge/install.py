@@ -79,8 +79,17 @@ def _runner_command(service: str) -> list[str]:
     return [_stable_python(), dest]
 
 
-def _run_args(service: str, target: str, listen: str) -> list[str]:
-    return _runner_command(service) + ["run", "--to", target, "--listen", listen]
+def _run_args(
+    service: str,
+    protocol: str,
+    listen: str,
+    target: str | None = None,
+    deliver: str | None = None,
+) -> list[str]:
+    base = _runner_command(service)
+    if protocol == "udp":
+        return base + ["run", "--udp", "--listen", listen, "--deliver", deliver]
+    return base + ["run", "--to", target, "--listen", listen]
 
 
 # --- macOS (launchd) ---------------------------------------------------------
@@ -107,14 +116,12 @@ def _migrate_legacy_macos(listen_port: int) -> None:
     print(f"Migrated: removed legacy agent {LEGACY_MACOS_LABEL} (replaced by this bridge).")
 
 
-def _install_macos(service: str, target: str, listen: str, listen_port: int) -> int:
+def _install_macos(service: str, run_args: list[str], listen_port: int) -> int:
     _migrate_legacy_macos(listen_port)
     label = macos_label(service)
     plist = os.path.expanduser(f"~/Library/LaunchAgents/{label}.plist")
     os.makedirs(os.path.dirname(plist), exist_ok=True)
-    args = "".join(
-        f"        <string>{a}</string>\n" for a in _run_args(service, target, listen)
-    )
+    args = "".join(f"        <string>{a}</string>\n" for a in run_args)
     plist_xml = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
@@ -157,12 +164,12 @@ def _status_macos(service: str) -> str:
 # --- Linux (systemd --user) --------------------------------------------------
 
 
-def _install_linux(service: str, target: str, listen: str, listen_port: int) -> int:
+def _install_linux(service: str, run_args: list[str]) -> int:
     unit_dir = os.path.expanduser("~/.config/systemd/user")
     os.makedirs(unit_dir, exist_ok=True)
     unit_name = systemd_unit(service)
     unit = os.path.join(unit_dir, unit_name)
-    exec_start = " ".join(_run_args(service, target, listen))
+    exec_start = " ".join(run_args)
     with open(unit, "w") as fh:
         fh.write(
             f"[Unit]\nDescription=mcp-host-bridge loopback relay ({service})\n\n"
@@ -219,9 +226,9 @@ def _netsh_delete(listen_host: str, listen_port: int) -> None:
     )
 
 
-def _install_windows_task(service: str, target: str, listen: str) -> int:
+def _install_windows_task(service: str, run_args: list[str]) -> int:
     tn = windows_task(service)
-    cmd = " ".join(f'"{a}"' if " " in a else a for a in _run_args(service, target, listen))
+    cmd = " ".join(f'"{a}"' if " " in a else a for a in run_args)
     rc = subprocess.run(
         ["schtasks", "/Create", "/TN", tn, "/TR", cmd, "/SC", "ONLOGON", "/F"],
         capture_output=True, text=True,
@@ -239,14 +246,19 @@ def _install_windows_task(service: str, target: str, listen: str) -> int:
 
 def _install_windows(
     service: str,
-    target: str,
-    listen: str,
+    protocol: str,
+    run_args: list[str],
     listen_host: str,
     listen_port: int,
-    target_host: str,
-    target_port: int,
+    target_host: str | None,
+    target_port: int | None,
 ) -> int:
-    # Prefer native netsh portproxy: persistent, no Python dependency.
+    # netsh portproxy is TCP-only (v4tov4 does not forward UDP), so UDP services
+    # go straight to the Scheduled Task that runs the relay.
+    if protocol == "udp":
+        print("UDP service: netsh portproxy is TCP-only, using a Scheduled Task running the relay.")
+        return _install_windows_task(service, run_args)
+    # TCP: prefer native netsh portproxy (persistent, no Python dependency).
     if _netsh_add(listen_host, listen_port, target_host, target_port):
         print(
             f"Installed netsh portproxy: {listen_host}:{listen_port} -> "
@@ -254,7 +266,7 @@ def _install_windows(
         )
         return 0
     print("netsh portproxy unavailable; falling back to a Scheduled Task running the relay.")
-    return _install_windows_task(service, target, listen)
+    return _install_windows_task(service, run_args)
 
 
 def _uninstall_windows(service: str, listen_host: str, listen_port: int) -> int:
@@ -289,22 +301,31 @@ def install(
     service: str,
     listen_host: str,
     listen_port: int,
-    target_host: str,
-    target_port: int,
+    protocol: str = "tcp",
+    target_host: str | None = None,
+    target_port: int | None = None,
+    deliver_host: str | None = None,
+    deliver_port: int | None = None,
     probe: tuple[bytes, bytes] | None = None,
 ) -> int:
-    target = f"{target_host}:{target_port}"
     listen = f"{listen_host}:{listen_port}"
+    if protocol == "udp":
+        deliver = f"{deliver_host}:{deliver_port}"
+        run_args = _run_args(service, "udp", listen, deliver=deliver)
+    else:
+        target = f"{target_host}:{target_port}"
+        run_args = _run_args(service, "tcp", listen, target=target)
+
     if sys.platform == "darwin":
-        rc = _install_macos(service, target, listen, listen_port)
+        rc = _install_macos(service, run_args, listen_port)
     elif sys.platform == "win32":
         rc = _install_windows(
-            service, target, listen, listen_host, listen_port, target_host, target_port
+            service, protocol, run_args, listen_host, listen_port, target_host, target_port
         )
     else:
-        rc = _install_linux(service, target, listen, listen_port)
+        rc = _install_linux(service, run_args)
     if rc == 0:
-        _next_steps(service, listen_host, listen_port, probe)
+        _next_steps(service, protocol, listen_host, listen_port, deliver_host, deliver_port, probe)
     return rc
 
 
@@ -320,6 +341,9 @@ def status(
     service: str,
     listen_host: str,
     listen_port: int,
+    protocol: str = "tcp",
+    deliver_host: str | None = None,
+    deliver_port: int | None = None,
     probe: tuple[bytes, bytes] | None = None,
 ) -> int:
     if sys.platform == "darwin":
@@ -328,19 +352,42 @@ def status(
         state = _status_windows(service, listen_host, listen_port)
     else:
         state = _status_linux(service)
-    print(f"Service '{service}'  ({listen_host}:{listen_port})")
+    print(f"Service '{service}'  ({protocol.upper()} {listen_host}:{listen_port})")
     print(f"  persistence: {state}")
-    payload, expect = (probe or (None, None))
-    print(f"  probe: {relay.probe(listen_host, listen_port, payload, expect)}")
+    if protocol == "udp":
+        print(f"  delivers to: {deliver_host}:{deliver_port} (loopback MCP listener)")
+        busy = relay.udp_port_in_use(listen_host, listen_port)
+        print(f"  listen port: {'in use (relay appears to be running)' if busy else 'free'}")
+        print("  note: a live UDP check requires the remote (e.g. WSJT-X) to send a datagram.")
+    else:
+        payload, expect = (probe or (None, None))
+        print(f"  probe: {relay.probe(listen_host, listen_port, payload, expect)}")
     return 0
 
 
 def _next_steps(
     service: str,
+    protocol: str,
     listen_host: str,
     listen_port: int,
+    deliver_host: str | None,
+    deliver_port: int | None,
     probe: tuple[bytes, bytes] | None,
 ) -> None:
+    if protocol == "udp":
+        print(
+            "\nNext steps:\n"
+            f"  1. Point the MCP server ({service}) at the loopback listener "
+            f"{deliver_host}:{deliver_port}.\n"
+            f"  2. In the remote app's UDP settings, send to this host's LAN IP, "
+            f"port {listen_port}.\n"
+            "  3. Save, then fully quit and reopen the MCP client (e.g. Cmd-Q / Alt-F4).\n"
+            f"  4. Ask for the {service} status to confirm.\n"
+        )
+        time.sleep(1.5)
+        busy = relay.udp_port_in_use(listen_host, listen_port)
+        print(f"Listen {listen_host}:{listen_port} in use (relay running): {busy}")
+        return
     print(
         "\nNext steps:\n"
         f"  1. In the MCP connector settings, set the {service} host to {listen_host} "

@@ -9,11 +9,14 @@ in ``~/.mcp-host-bridge/services.ini`` (INI is used rather than TOML because
 ``tomllib`` is 3.11+ and the runtime must stay standard-library-only on 3.10).
 The file is optional; its absence is completely fine.
 
+Each entry is ``name = port`` for a TCP service, or ``name = port udp`` (the
+protocol may also be comma-separated, ``port,udp``) for a UDP one.
+
 Example ``services.ini``::
 
     [services]
     flrig = 12345
-    wsjtx = 2237
+    wsjtx = 2237 udp
 """
 
 from __future__ import annotations
@@ -33,8 +36,12 @@ class Service:
     name: str
     port: int
     description: str = ""
+    # "tcp" (the default) or "udp". UDP services use the inverted listen/deliver
+    # arg model (see relay.serve_udp); TCP services use listen/target.
+    protocol: str = "tcp"
     # Optional handshake the probe can send through the bridge to confirm the
-    # remote service actually answers. (payload, expected-substring-in-reply)
+    # remote service actually answers. (payload, expected-substring-in-reply).
+    # Meaningful for TCP only; UDP presets leave this None.
     probe: tuple[bytes, bytes] | None = None
 
 
@@ -48,6 +55,7 @@ BUILTIN: dict[str, Service] = {
         probe=(b"<CMD><PROGRAM></CMD>\r\n", b"PROGRAMRESPONSE"),
     ),
     "fldigi": Service("fldigi", 7362, "fldigi XML-RPC interface"),
+    "wsjtx": Service("wsjtx", 2237, "WSJT-X UDP message protocol", protocol="udp"),
 }
 
 
@@ -63,10 +71,16 @@ def _load_config(path: str = CONFIG_FILE) -> dict[str, Service]:
     out: dict[str, Service] = {}
     if parser.has_section("services"):
         for name, value in parser.items("services"):
+            # "port" (tcp) or "port udp" / "port,udp".
+            parts = value.replace(",", " ").split()
             try:
-                out[name] = Service(name, int(value), "user-defined (services.ini)")
-            except ValueError:
+                port = int(parts[0])
+            except (ValueError, IndexError):
                 continue
+            proto = parts[1].lower() if len(parts) > 1 else "tcp"
+            if proto not in ("tcp", "udp"):
+                proto = "tcp"
+            out[name] = Service(name, port, "user-defined (services.ini)", protocol=proto)
     return out
 
 
@@ -90,7 +104,7 @@ def resolve(name: str | None, port: int | None, path: str = CONFIG_FILE) -> Serv
     if name and name in services:
         base = services[name]
         if port is not None:
-            return Service(base.name, port, base.description, base.probe)
+            return Service(base.name, port, base.description, base.protocol, base.probe)
         return base
     if port is not None:
         return Service(name or f"port{port}", port, "custom")
@@ -108,7 +122,9 @@ def format_list(path: str = CONFIG_FILE) -> str:
     lines = ["Available service presets:", ""]
     for name in sorted(services):
         svc = services[name]
-        lines.append(f"  {name.ljust(width)}  {svc.port:<6}  {svc.description}")
+        lines.append(
+            f"  {name.ljust(width)}  {svc.port:<6}  {svc.protocol:<4}  {svc.description}"
+        )
     lines += [
         "",
         f"Config file (optional): {CONFIG_FILE}",

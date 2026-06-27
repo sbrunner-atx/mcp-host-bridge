@@ -10,7 +10,17 @@ from mcp_host_bridge import services
 def test_builtin_presets_present():
     svcs = services.all_services(path="/nonexistent/services.ini")
     assert svcs["n3fjp"].port == 1100
+    assert svcs["n3fjp"].protocol == "tcp"
     assert svcs["fldigi"].port == 7362
+    assert svcs["wsjtx"].port == 2237
+    assert svcs["wsjtx"].protocol == "udp"
+    assert svcs["wsjtx"].probe is None
+
+
+def test_resolve_udp_preset_keeps_protocol_on_port_override():
+    svc = services.resolve("wsjtx", 3000, path="/nonexistent.ini")
+    assert svc.protocol == "udp"
+    assert svc.port == 3000
 
 
 def test_resolve_known_preset():
@@ -47,6 +57,16 @@ def test_user_config_overlays_and_extends(tmp_path):
 
     resolved = services.resolve("flrig", None, path=str(cfg))
     assert resolved.port == 12345
+
+
+def test_config_round_trips_protocol(tmp_path):
+    cfg = tmp_path / "services.ini"
+    cfg.write_text("[services]\nmyudp = 9000 udp\nmycomma = 9001,udp\nmytcp = 9002\n")
+    svcs = services.all_services(path=str(cfg))
+    assert svcs["myudp"].protocol == "udp"
+    assert svcs["mycomma"].protocol == "udp"
+    assert svcs["mytcp"].protocol == "tcp"
+    assert svcs["myudp"].port == 9000
 
 
 def test_malformed_config_is_ignored(tmp_path):
