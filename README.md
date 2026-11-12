@@ -1,5 +1,7 @@
 # mcp-host-bridge
 
+Project page: [ae5vg.com/products/mcp-host-bridge](https://ae5vg.com/products/mcp-host-bridge.html)
+
 A tiny, configurable **loopback-to-remote TCP/UDP relay** so a sandboxed MCP
 client can reach a service running on **another computer**.
 
@@ -190,4 +192,4 @@ fronts (N3FJP, fldigi, etc.). It does not modify or inspect traffic.
 
 ## License
 
-[MIT](LICENSE) © 2026 Stefan Brunner (AE5VG)
+[MIT](https://github.com/sbrunner-atx/mcp-host-bridge/blob/main/LICENSE) © 2026 Stefan Brunner (AE5VG)
